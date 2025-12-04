@@ -342,7 +342,7 @@ def strategy_trendline_breakout(df):
 
 def main():
     # --- Sidebar ---
-    st.sidebar.caption("v0.4")
+    st.sidebar.caption("v0.5")
     lang_opt = st.sidebar.selectbox("Language / 語言", ['English', '繁體中文'])
     txt = TRANSLATIONS[lang_opt]
     
@@ -440,6 +440,9 @@ def main():
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df[col] = display_df[col].dt.strftime('%Y-%m-%d')
             
+            # Sort by Date DESCENDING (Newest first)
+            display_df = display_df.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
+            
             # Calculate dynamic height: (rows + 1 header) * 35px per row approx
             table_height = (len(display_df) + 1) * 35 + 3
 
@@ -513,6 +516,9 @@ def main():
             
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df_t[col] = display_df_t[col].dt.strftime('%Y-%m-%d')
+
+            # Sort by Date DESCENDING (Newest first)
+            display_df_t = display_df_t.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
 
             # Calculate dynamic height
             table_height_t = (len(display_df_t) + 1) * 35 + 3
