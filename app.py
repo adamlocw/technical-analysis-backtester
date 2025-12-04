@@ -78,9 +78,26 @@ TRANSLATIONS = {
 
 @st.cache_data
 def get_stock_data(ticker, period="1y"):
-    """Download OHLCV data from yfinance."""
+    """
+    Download OHLCV data from yfinance.
+    Supports standard periods (1y, 2y, 5y) and calculates start dates for others (3y, 4y).
+    """
     try:
-        df = yf.download(ticker, period=period, progress=False, multi_level_index=False)
+        # yfinance standard valid periods that are years-based
+        standard_periods = ['1y', '2y', '5y', '10y', 'max']
+        
+        if period in standard_periods:
+            df = yf.download(ticker, period=period, progress=False, multi_level_index=False)
+        else:
+            # Handle custom years like '3y', '4y' by calculating start date
+            try:
+                years = int(period.replace('y', ''))
+                start_date = (pd.Timestamp.now() - pd.DateOffset(years=years)).strftime('%Y-%m-%d')
+                df = yf.download(ticker, start=start_date, progress=False, multi_level_index=False)
+            except ValueError:
+                # Fallback to 1y if parsing fails
+                df = yf.download(ticker, period="1y", progress=False, multi_level_index=False)
+
         if df.empty:
             return None
         # Ensure standard column names
@@ -325,7 +342,7 @@ def strategy_trendline_breakout(df):
 
 def main():
     # --- Sidebar ---
-    st.sidebar.caption("v0.3")
+    st.sidebar.caption("v0.4")
     lang_opt = st.sidebar.selectbox("Language / 語言", ['English', '繁體中文'])
     txt = TRANSLATIONS[lang_opt]
     
@@ -340,8 +357,9 @@ def main():
     final_ticker = custom_ticker.upper().strip() if custom_ticker else ticker_input
     
     # Period Selection
-    # period = st.sidebar.selectbox(txt['period_label'], ['6mo', '1y', '2y', '5y'], index=1)
-    period = "1y" # Locked to 1y as per prompt requirement (or make editable)
+    # Update: Allows selection of 1y, 2y, 3y, 4y, 5y
+    period_options = ['1y', '2y', '3y', '4y', '5y']
+    period = st.sidebar.selectbox(txt['period_label'], period_options, index=0)
     
     st.title(f"{txt['title']} - {final_ticker}")
     
