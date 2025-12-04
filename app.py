@@ -440,11 +440,18 @@ def main():
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df[col] = display_df[col].dt.strftime('%Y-%m-%d')
             
-            st.dataframe(display_df.style.format({
-                txt['col_entry_price']: "{:.2f}",
-                txt['col_exit_price']: "{:.2f}",
-                txt['col_return']: "{:.2f}%"
-            }), use_container_width=True) # Mobile Optimization
+            # Calculate dynamic height: (rows + 1 header) * 35px per row approx
+            table_height = (len(display_df) + 1) * 35 + 3
+
+            st.dataframe(
+                display_df.style.format({
+                    txt['col_entry_price']: "{:.2f}",
+                    txt['col_exit_price']: "{:.2f}",
+                    txt['col_return']: "{:.2f}%"
+                }),
+                use_container_width=True,
+                height=table_height
+            )
         else:
             st.info("No signals detected.")
 
@@ -507,11 +514,18 @@ def main():
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df_t[col] = display_df_t[col].dt.strftime('%Y-%m-%d')
 
-            st.dataframe(display_df_t.style.format({
-                txt['col_entry_price']: "{:.2f}",
-                txt['col_exit_price']: "{:.2f}",
-                txt['col_return']: "{:.2f}%"
-            }), use_container_width=True) # Mobile Optimization
+            # Calculate dynamic height
+            table_height_t = (len(display_df_t) + 1) * 35 + 3
+
+            st.dataframe(
+                display_df_t.style.format({
+                    txt['col_entry_price']: "{:.2f}",
+                    txt['col_exit_price']: "{:.2f}",
+                    txt['col_return']: "{:.2f}%"
+                }),
+                use_container_width=True,
+                height=table_height_t
+            )
         else:
             st.info("No signals detected.")
 
