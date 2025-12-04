@@ -395,7 +395,9 @@ def main():
                 # Red Down Arrow
                 ax1.plot(date, price, marker='v', color='red', markersize=10, linestyle='None')
 
-        st.pyplot(fig)
+        # Mobile Optimization: Tight layout and container width
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
         
         # Table
         if not macd_trades.empty:
@@ -423,7 +425,7 @@ def main():
                 txt['col_entry_price']: "{:.2f}",
                 txt['col_exit_price']: "{:.2f}",
                 txt['col_return']: "{:.2f}%"
-            }))
+            }), use_container_width=True) # Mobile Optimization
         else:
             st.info("No signals detected.")
 
@@ -465,7 +467,9 @@ def main():
                 valid_dates = [df.index[min(max(0, i), len(df)-1)] for i in x_vals]
                 ax.plot(valid_dates, y_vals, color='green', linestyle='--', alpha=0.5, linewidth=1)
 
-        st.pyplot(fig2)
+        # Mobile Optimization
+        fig2.tight_layout()
+        st.pyplot(fig2, use_container_width=True)
         
         if not trend_trades.empty:
             disp_cols = {
@@ -488,7 +492,7 @@ def main():
                 txt['col_entry_price']: "{:.2f}",
                 txt['col_exit_price']: "{:.2f}",
                 txt['col_return']: "{:.2f}%"
-            }))
+            }), use_container_width=True) # Mobile Optimization
         else:
             st.info("No signals detected.")
 
