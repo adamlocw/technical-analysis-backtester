@@ -325,6 +325,7 @@ def strategy_trendline_breakout(df):
 
 def main():
     # --- Sidebar ---
+    st.sidebar.caption("v0.3")
     lang_opt = st.sidebar.selectbox("Language / 語言", ['English', '繁體中文'])
     txt = TRANSLATIONS[lang_opt]
     
