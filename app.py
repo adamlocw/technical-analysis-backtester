@@ -40,7 +40,13 @@ TRANSLATIONS = {
         'bullish': 'Bullish',
         'bearish': 'Bearish',
         'chart_price': 'Price & Signals',
-        'chart_macd': 'MACD Oscillator'
+        'chart_macd': 'MACD Oscillator',
+        # New Translations for v0.6
+        'setting_trend_title': 'Trendline Strategy Settings',
+        'setting_order': 'Swing Detection Order',
+        'setting_window': 'Regression Window (Candles)',
+        'rec_order': 'Recommended: BTC/ETH=5, SOL=4',
+        'rec_window': 'Recommended: BTC/ETH=50, SOL=40'
     },
     '繁體中文': {
         'title': '技術分析回測應用程式',
@@ -66,9 +72,14 @@ TRANSLATIONS = {
         'rating_tooltip': '>80%: ★★★★★\n70-80%: ★★★★☆\n60-70%: ★★★☆☆\n50-60%: ★★☆☆☆\n<50%: ★☆☆☆☆',
         'bullish': '看漲 (做多)',
         'bearish': '看跌 (做空)',
-        # 修改：圖表標題強制使用英文以避免亂碼
         'chart_price': 'Price & Signals',
-        'chart_macd': 'MACD Oscillator'
+        'chart_macd': 'MACD Oscillator',
+        # New Translations for v0.6
+        'setting_trend_title': '趨勢線策略設定',
+        'setting_order': '擺盪偵測範圍 (Order)',
+        'setting_window': '回歸窗口 (K線數量)',
+        'rec_order': '推薦: BTC/ETH=5, SOL=4',
+        'rec_window': '推薦: BTC/ETH=50, SOL=40'
     }
 }
 
@@ -253,16 +264,13 @@ def strategy_macd_divergence(df):
 
 # --- Strategy 2: Trendline Breakout ---
 
-def strategy_trendline_breakout(df):
+def strategy_trendline_breakout(df, order=5, lookback_window=50):
     """
     Detect Trendline Breakouts using rolling regression on pivots.
+    order: parameter for argrelextrema (swing detection)
+    lookback_window: number of candles to look back for trendline fitting
     """
-    order = 5
-    lookback_window = 50 # How far back to scan for points to fit line
-    
-    # Identify pivots (Highs/Lows) across the whole dataset first
-    # (In a real streaming app, this would be recalculated daily, 
-    # but for vectorization we find all potential pivots first)
+    # Identify pivots (Highs/Lows) across the whole dataset
     highs_idx = argrelextrema(df['High'].values, np.greater, order=order)[0]
     lows_idx = argrelextrema(df['Low'].values, np.less, order=order)[0]
     
@@ -273,9 +281,6 @@ def strategy_trendline_breakout(df):
     
     # Optimization: Only check days where a breakout might occur is expensive loop in python.
     # We will check every day.
-    
-    # To save time, we only run logic if we have enough points in the window.
-    # We maintain a list of 'active' trendlines? No, let's recalculate simply.
     
     # Iterate days
     for i in range(start_scan, len(df)):
@@ -342,7 +347,7 @@ def strategy_trendline_breakout(df):
 
 def main():
     # --- Sidebar ---
-    st.sidebar.caption("v0.5")
+    st.sidebar.caption("v0.6")
     lang_opt = st.sidebar.selectbox("Language / 語言", ['English', '繁體中文'])
     txt = TRANSLATIONS[lang_opt]
     
@@ -361,6 +366,26 @@ def main():
     period_options = ['1y', '2y', '3y', '4y', '5y']
     period = st.sidebar.selectbox(txt['period_label'], period_options, index=0)
     
+    # --- New: Trendline Settings (v0.6) ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader(txt['setting_trend_title'])
+    
+    trend_order = st.sidebar.slider(
+        txt['setting_order'], 
+        min_value=3, 
+        max_value=10, 
+        value=5, 
+        help=txt['rec_order']
+    )
+    
+    trend_window = st.sidebar.slider(
+        txt['setting_window'], 
+        min_value=20, 
+        max_value=100, 
+        value=50, 
+        help=txt['rec_window']
+    )
+
     st.title(f"{txt['title']} - {final_ticker}")
     
     # --- Data Fetching ---
@@ -373,93 +398,18 @@ def main():
 
     # --- Run Analysis ---
     macd_signals, df_macd = strategy_macd_divergence(df.copy())
-    trend_signals = strategy_trendline_breakout(df.copy())
+    # v0.6: Pass dynamic slider values to trendline strategy
+    trend_signals = strategy_trendline_breakout(df.copy(), order=trend_order, lookback_window=trend_window)
     
     macd_trades = perform_backtest(df, macd_signals)
     trend_trades = perform_backtest(df, trend_signals)
     
     # --- Tabs ---
-    tab1, tab2, tab3 = st.tabs([txt['tab_macd'], txt['tab_trend'], txt['tab_summary']])
+    # Update: Swapped order - Trendline first, then MACD
+    tab1, tab2, tab3 = st.tabs([txt['tab_trend'], txt['tab_macd'], txt['tab_summary']])
     
-    # --- TAB 1: MACD ---
+    # --- TAB 1: Trendline (Formerly Tab 2) ---
     with tab1:
-        st.subheader(f"MACD (12,26,9) - {final_ticker}")
-        
-        # Plotting
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
-        
-        # Price
-        ax1.plot(df.index, df['Close'], label='Close', color='black', alpha=0.6)
-        ax1.set_ylabel('Price')
-        ax1.set_title(txt['chart_price']) # Uses English even in ZH mode now
-        ax1.grid(True, alpha=0.3)
-        
-        # MACD
-        ax2.plot(df_macd.index, df_macd['MACD_12_26_9'], label='MACD', color='blue')
-        ax2.plot(df_macd.index, df_macd['MACDs_12_26_9'], label='Signal', color='orange')
-        ax2.bar(df_macd.index, df_macd['MACDh_12_26_9'], label='Hist', color='gray', alpha=0.3)
-        ax2.set_title(txt['chart_macd']) # Uses English even in ZH mode now
-        ax2.grid(True, alpha=0.3)
-        
-        # Plot Signals
-        for sig in macd_signals:
-            date = sig['date']
-            price = df.loc[date, 'Close']
-            
-            if sig['type'] == 'Bullish':
-                # Green Up Arrow
-                ax1.plot(date, price, marker='^', color='green', markersize=10, linestyle='None')
-                # Draw line connecting divergence points if needed (advanced)
-            else:
-                # Red Down Arrow
-                ax1.plot(date, price, marker='v', color='red', markersize=10, linestyle='None')
-
-        # Mobile Optimization: Tight layout and container width
-        fig.tight_layout()
-        st.pyplot(fig, use_container_width=True)
-        
-        # Table
-        if not macd_trades.empty:
-            # Format table columns for display
-            disp_cols = {
-                'Signal Date': txt['col_date'],
-                'Type': txt['col_type'],
-                'Entry Date': txt['col_entry_date'],
-                'Entry Price': txt['col_entry_price'],
-                'Exit Date': txt['col_exit_date'],
-                'Exit Price': txt['col_exit_price'],
-                'Return (%)': txt['col_return']
-            }
-            
-            # Map type text
-            display_df = macd_trades.copy()
-            display_df['Type'] = display_df['Type'].map({'Bullish': txt['bullish'], 'Bearish': txt['bearish']})
-            display_df = display_df.rename(columns=disp_cols)
-            
-            # Format dates and floats
-            for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
-                display_df[col] = display_df[col].dt.strftime('%Y-%m-%d')
-            
-            # Sort by Date DESCENDING (Newest first)
-            display_df = display_df.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
-            
-            # Calculate dynamic height: (rows + 1 header) * 35px per row approx
-            table_height = (len(display_df) + 1) * 35 + 3
-
-            st.dataframe(
-                display_df.style.format({
-                    txt['col_entry_price']: "{:.2f}",
-                    txt['col_exit_price']: "{:.2f}",
-                    txt['col_return']: "{:.2f}%"
-                }),
-                use_container_width=True,
-                height=table_height
-            )
-        else:
-            st.info("No signals detected.")
-
-    # --- TAB 2: Trendline ---
-    with tab2:
         st.subheader(f"Trendline Breakout - {final_ticker}")
         
         fig2, ax = plt.subplots(figsize=(12, 6))
@@ -535,6 +485,83 @@ def main():
         else:
             st.info("No signals detected.")
 
+    # --- TAB 2: MACD (Formerly Tab 1) ---
+    with tab2:
+        st.subheader(f"MACD (12,26,9) - {final_ticker}")
+        
+        # Plotting
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        
+        # Price
+        ax1.plot(df.index, df['Close'], label='Close', color='black', alpha=0.6)
+        ax1.set_ylabel('Price')
+        ax1.set_title(txt['chart_price']) # Uses English even in ZH mode now
+        ax1.grid(True, alpha=0.3)
+        
+        # MACD
+        ax2.plot(df_macd.index, df_macd['MACD_12_26_9'], label='MACD', color='blue')
+        ax2.plot(df_macd.index, df_macd['MACDs_12_26_9'], label='Signal', color='orange')
+        ax2.bar(df_macd.index, df_macd['MACDh_12_26_9'], label='Hist', color='gray', alpha=0.3)
+        ax2.set_title(txt['chart_macd']) # Uses English even in ZH mode now
+        ax2.grid(True, alpha=0.3)
+        
+        # Plot Signals
+        for sig in macd_signals:
+            date = sig['date']
+            price = df.loc[date, 'Close']
+            
+            if sig['type'] == 'Bullish':
+                # Green Up Arrow
+                ax1.plot(date, price, marker='^', color='green', markersize=10, linestyle='None')
+                # Draw line connecting divergence points if needed (advanced)
+            else:
+                # Red Down Arrow
+                ax1.plot(date, price, marker='v', color='red', markersize=10, linestyle='None')
+
+        # Mobile Optimization: Tight layout and container width
+        fig.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        
+        # Table
+        if not macd_trades.empty:
+            # Format table columns for display
+            disp_cols = {
+                'Signal Date': txt['col_date'],
+                'Type': txt['col_type'],
+                'Entry Date': txt['col_entry_date'],
+                'Entry Price': txt['col_entry_price'],
+                'Exit Date': txt['col_exit_date'],
+                'Exit Price': txt['col_exit_price'],
+                'Return (%)': txt['col_return']
+            }
+            
+            # Map type text
+            display_df = macd_trades.copy()
+            display_df['Type'] = display_df['Type'].map({'Bullish': txt['bullish'], 'Bearish': txt['bearish']})
+            display_df = display_df.rename(columns=disp_cols)
+            
+            # Format dates and floats
+            for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
+                display_df[col] = display_df[col].dt.strftime('%Y-%m-%d')
+            
+            # Sort by Date DESCENDING (Newest first)
+            display_df = display_df.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
+            
+            # Calculate dynamic height: (rows + 1 header) * 35px per row approx
+            table_height = (len(display_df) + 1) * 35 + 3
+
+            st.dataframe(
+                display_df.style.format({
+                    txt['col_entry_price']: "{:.2f}",
+                    txt['col_exit_price']: "{:.2f}",
+                    txt['col_return']: "{:.2f}%"
+                }),
+                use_container_width=True,
+                height=table_height
+            )
+        else:
+            st.info("No signals detected.")
+
     # --- TAB 3: Summary & Reliability ---
     with tab3:
         st.subheader(txt['tab_summary'])
@@ -557,17 +584,18 @@ def main():
         t_total, t_wins, t_rate = get_stats(trend_trades)
         t_stars = calculate_star_rating(t_rate) if t_total > 0 else "N/A"
 
+        # Update: Display Trendline stats in col1 (left), MACD in col2 (right)
         with col1:
-            st.markdown(f"### {txt['tab_macd']}")
-            st.metric(txt['total_signals'], m_total)
-            st.metric(txt['win_rate'], f"{m_rate:.1f}%")
-            st.metric(txt['reliability'], m_stars, help=txt['rating_tooltip'])
-            
-        with col2:
             st.markdown(f"### {txt['tab_trend']}")
             st.metric(txt['total_signals'], t_total)
             st.metric(txt['win_rate'], f"{t_rate:.1f}%")
             st.metric(txt['reliability'], t_stars, help=txt['rating_tooltip'])
+            
+        with col2:
+            st.markdown(f"### {txt['tab_macd']}")
+            st.metric(txt['total_signals'], m_total)
+            st.metric(txt['win_rate'], f"{m_rate:.1f}%")
+            st.metric(txt['reliability'], m_stars, help=txt['rating_tooltip'])
 
 if __name__ == "__main__":
     main()
