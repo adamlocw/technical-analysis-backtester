@@ -5,7 +5,7 @@ import pandas_ta as ta
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
-from scipy.stats import linregress
+# from scipy.stats import linregress # Removed in favor of np.polyfit
 from datetime import timedelta
 
 # -----------------------------------------------------------------------------
@@ -21,6 +21,8 @@ TRANSLATIONS = {
         'ticker_label': 'Ticker Symbol (e.g., BTC-USD, AAPL)',
         'period_label': 'Data Period',
         'error_ticker': 'Error: Could not fetch data for symbol "{symbol}". Please check inputs.',
+        'error_data_length': 'Warning: Not enough data ({length} candles) to calculate all indicators. Some charts may be empty.',
+        'tab_vision': 'TrendVision Pro', 
         'tab_macd': 'MACD Divergence',
         'tab_trend': 'Trendline Breakout',
         'tab_summary': 'Backtest Summary',
@@ -41,12 +43,14 @@ TRANSLATIONS = {
         'bearish': 'Bearish',
         'chart_price': 'Price & Signals',
         'chart_macd': 'MACD Oscillator',
-        # New Translations for v0.6
         'setting_trend_title': 'Trendline Strategy Settings',
         'setting_order': 'Swing Detection Order',
         'setting_window': 'Regression Window (Candles)',
         'rec_order': 'Recommended: BTC/ETH=5, SOL=4',
-        'rec_window': 'Recommended: BTC/ETH=50, SOL=40'
+        'rec_window': 'Recommended: BTC/ETH=50, SOL=40',
+        'vision_title': 'TrendVision Pro: Live Trend Analysis',
+        'legend_res': 'Resistance Trendline',
+        'legend_sup': 'Support Trendline'
     },
     '繁體中文': {
         'title': '技術分析回測應用程式',
@@ -54,6 +58,8 @@ TRANSLATIONS = {
         'ticker_label': '標的代碼 (例如 BTC-USD, AAPL)',
         'period_label': '資料期間',
         'error_ticker': '錯誤：無法取得 "{symbol}" 的資料。請檢查代碼是否正確。',
+        'error_data_length': '警告：資料不足 ({length} 根 K 線) 無法計算所有指標。部分圖表可能為空。',
+        'tab_vision': 'TrendVision Pro', 
         'tab_macd': 'MACD 背馳策略',
         'tab_trend': '趨勢線突破策略',
         'tab_summary': '回測摘要',
@@ -74,12 +80,14 @@ TRANSLATIONS = {
         'bearish': '看跌 (做空)',
         'chart_price': 'Price & Signals',
         'chart_macd': 'MACD Oscillator',
-        # New Translations for v0.6
         'setting_trend_title': '趨勢線策略設定',
         'setting_order': '擺盪偵測範圍 (Order)',
         'setting_window': '回歸窗口 (K線數量)',
         'rec_order': '推薦: BTC/ETH=5, SOL=4',
-        'rec_window': '推薦: BTC/ETH=50, SOL=40'
+        'rec_window': '推薦: BTC/ETH=50, SOL=40',
+        'vision_title': 'TrendVision Pro: 即時趨勢分析',
+        'legend_res': '阻力趨勢線 (Resistance)',
+        'legend_sup': '支撐趨勢線 (Support)'
     }
 }
 
@@ -91,11 +99,11 @@ TRANSLATIONS = {
 def get_stock_data(ticker, period="1y"):
     """
     Download OHLCV data from yfinance.
-    Supports standard periods (1y, 2y, 5y) and calculates start dates for others (3y, 4y).
+    Supports standard periods and custom year calculations.
     """
     try:
-        # yfinance standard valid periods that are years-based
-        standard_periods = ['1y', '2y', '5y', '10y', 'max']
+        # yfinance standard valid periods
+        standard_periods = ['1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'max']
         
         if period in standard_periods:
             df = yf.download(ticker, period=period, progress=False, multi_level_index=False)
@@ -106,7 +114,7 @@ def get_stock_data(ticker, period="1y"):
                 start_date = (pd.Timestamp.now() - pd.DateOffset(years=years)).strftime('%Y-%m-%d')
                 df = yf.download(ticker, start=start_date, progress=False, multi_level_index=False)
             except ValueError:
-                # Fallback to 1y if parsing fails
+                # Fallback
                 df = yf.download(ticker, period="1y", progress=False, multi_level_index=False)
 
         if df.empty:
@@ -128,14 +136,11 @@ def calculate_star_rating(win_rate):
 def perform_backtest(df, signals, hold_days=10):
     """
     Generic backtest engine.
-    signals: list of dicts {'index': int, 'type': 'Bullish'/'Bearish', 'date': timestamp}
-    Returns DataFrame of trades.
     """
     trades = []
     
     for sig in signals:
         idx = sig['index']
-        # Check if we have enough data for entry (next day) and exit (next day + hold)
         if idx + 1 >= len(df) or idx + 1 + hold_days >= len(df):
             continue
             
@@ -171,141 +176,124 @@ def perform_backtest(df, signals, hold_days=10):
 def strategy_macd_divergence(df):
     """
     Detect MACD Divergences.
-    Logic:
-    1. Calculate MACD.
-    2. Find local extrema (peaks/valleys) in Price (Low/High) and MACD (Hist or Line).
-    3. Bullish Div: Price Lows are Lower, MACD Lows are Higher.
-    4. Bearish Div: Price Highs are Higher, MACD Highs are Lower.
+    Includes error handling for short data periods.
     """
-    # 1. Calc MACD
-    macd = df.ta.macd(fast=12, slow=26, signal=9)
-    df = pd.concat([df, macd], axis=1)
-    # Column names typically: MACD_12_26_9, MACDh_12_26_9 (Hist), MACDs_12_26_9 (Signal)
-    macd_col = 'MACD_12_26_9'
-    hist_col = 'MACDh_12_26_9' 
-    
-    # 2. Find Extrema (Order=5 means checking 5 candles before and 5 after)
-    # Note: Using order=5 implies a lag of 5 days to confirm the signal in real-time.
-    # We will simulate the signal trigger at index + 5.
-    order = 5
-    lookback = 20
-    
-    # Find local minima (indices)
-    price_lows_idx = argrelextrema(df['Low'].values, np.less, order=order)[0]
-    macd_lows_idx = argrelextrema(df[macd_col].values, np.less, order=order)[0]
-    
-    # Find local maxima (indices)
-    price_highs_idx = argrelextrema(df['High'].values, np.greater, order=order)[0]
-    macd_highs_idx = argrelextrema(df[macd_col].values, np.greater, order=order)[0]
-    
-    signals = []
-    
-    # Check Bullish Divergence
-    # Iterate through confirmed Price Lows
-    for i in range(1, len(price_lows_idx)):
-        curr_idx = price_lows_idx[i]
-        prev_idx = price_lows_idx[i-1]
-        
-        # Check if points are within lookback range to consider them "connected"
-        if (curr_idx - prev_idx) > lookback:
-            continue
-            
-        # Price Lower Low
-        price_lower_low = df['Low'].iloc[curr_idx] < df['Low'].iloc[prev_idx]
-        
-        # Find corresponding MACD lows (simplification: find closest MACD low to the price low)
-        # We look for a MACD low within a small window of the price low
-        curr_macd_val = df[macd_col].iloc[curr_idx]
-        prev_macd_val = df[macd_col].iloc[prev_idx]
-        
-        # Strict logic: actually verify if MACD formed a Higher Low around these times
-        # Here we simplify: if MACD at current Price Low > MACD at previous Price Low
-        macd_higher_low = curr_macd_val > prev_macd_val
-        
-        if price_lower_low and macd_higher_low and curr_macd_val < 0:
-            # Signal trigger is delayed by 'order' days because we need to wait to confirm it's a low
-            signal_idx = curr_idx + order
-            if signal_idx < len(df):
-                signals.append({
-                    'index': signal_idx,
-                    'type': 'Bullish',
-                    'date': df.index[signal_idx],
-                    'price_idx': curr_idx # For plotting the anchor
-                })
+    # Safeguard: Check if enough data exists for MACD (26+9 = 35 candles min approx)
+    if len(df) < 35:
+        return [], df
 
-    # Check Bearish Divergence
-    for i in range(1, len(price_highs_idx)):
-        curr_idx = price_highs_idx[i]
-        prev_idx = price_highs_idx[i-1]
-        
-        if (curr_idx - prev_idx) > lookback:
-            continue
+    try:
+        macd = df.ta.macd(fast=12, slow=26, signal=9)
+        if macd is None or macd.empty:
+            return [], df
             
-        # Price Higher High
-        price_higher_high = df['High'].iloc[curr_idx] > df['High'].iloc[prev_idx]
+        df = pd.concat([df, macd], axis=1)
+        macd_col = 'MACD_12_26_9'
+        hist_col = 'MACDh_12_26_9' 
         
-        # MACD Lower High
-        curr_macd_val = df[macd_col].iloc[curr_idx]
-        prev_macd_val = df[macd_col].iloc[prev_idx]
+        # Check if columns actually exist after concat
+        if macd_col not in df.columns:
+            return [], df
+
+        order = 5
+        lookback = 20
         
-        macd_lower_high = curr_macd_val < prev_macd_val
+        # Ensure we have enough data for extrema finding
+        if len(df) <= order * 2:
+             return [], df
+
+        price_lows_idx = argrelextrema(df['Low'].values, np.less, order=order)[0]
+        macd_lows_idx = argrelextrema(df[macd_col].values, np.less, order=order)[0]
         
-        if price_higher_high and macd_lower_high and curr_macd_val > 0:
-            signal_idx = curr_idx + order
-            if signal_idx < len(df):
-                signals.append({
-                    'index': signal_idx,
-                    'type': 'Bearish',
-                    'date': df.index[signal_idx],
-                    'price_idx': curr_idx
-                })
+        price_highs_idx = argrelextrema(df['High'].values, np.greater, order=order)[0]
+        macd_highs_idx = argrelextrema(df[macd_col].values, np.greater, order=order)[0]
+        
+        signals = []
+        
+        # Check Bullish Divergence
+        for i in range(1, len(price_lows_idx)):
+            curr_idx = price_lows_idx[i]
+            prev_idx = price_lows_idx[i-1]
+            
+            if (curr_idx - prev_idx) > lookback:
+                continue
                 
-    return signals, df
+            price_lower_low = df['Low'].iloc[curr_idx] < df['Low'].iloc[prev_idx]
+            curr_macd_val = df[macd_col].iloc[curr_idx]
+            prev_macd_val = df[macd_col].iloc[prev_idx]
+            macd_higher_low = curr_macd_val > prev_macd_val
+            
+            if price_lower_low and macd_higher_low and curr_macd_val < 0:
+                signal_idx = curr_idx + order
+                if signal_idx < len(df):
+                    signals.append({
+                        'index': signal_idx,
+                        'type': 'Bullish',
+                        'date': df.index[signal_idx],
+                        'price_idx': curr_idx
+                    })
 
-# --- Strategy 2: Trendline Breakout ---
+        # Check Bearish Divergence
+        for i in range(1, len(price_highs_idx)):
+            curr_idx = price_highs_idx[i]
+            prev_idx = price_highs_idx[i-1]
+            
+            if (curr_idx - prev_idx) > lookback:
+                continue
+                
+            price_higher_high = df['High'].iloc[curr_idx] > df['High'].iloc[prev_idx]
+            curr_macd_val = df[macd_col].iloc[curr_idx]
+            prev_macd_val = df[macd_col].iloc[prev_idx]
+            macd_lower_high = curr_macd_val < prev_macd_val
+            
+            if price_higher_high and macd_lower_high and curr_macd_val > 0:
+                signal_idx = curr_idx + order
+                if signal_idx < len(df):
+                    signals.append({
+                        'index': signal_idx,
+                        'type': 'Bearish',
+                        'date': df.index[signal_idx],
+                        'price_idx': curr_idx
+                    })
+                    
+        return signals, df
+        
+    except Exception as e:
+        # Fallback if any calculation fails
+        return [], df
+
+# --- Strategy 2: Trendline Breakout (Backtest) ---
 
 def strategy_trendline_breakout(df, order=5, lookback_window=50):
     """
-    Detect Trendline Breakouts using rolling regression on pivots.
-    order: parameter for argrelextrema (swing detection)
-    lookback_window: number of candles to look back for trendline fitting
+    Detect Trendline Breakouts for backtesting.
     """
-    # Identify pivots (Highs/Lows) across the whole dataset
+    if len(df) < order * 2:
+        return []
+
     highs_idx = argrelextrema(df['High'].values, np.greater, order=order)[0]
     lows_idx = argrelextrema(df['Low'].values, np.less, order=order)[0]
     
     signals = []
-    
-    # We iterate through the DF starting after enough data exists
     start_scan = lookback_window + order
     
-    # Optimization: Only check days where a breakout might occur is expensive loop in python.
-    # We will check every day.
-    
-    # Iterate days
+    # If data is shorter than lookback window, we can't backtest this strategy effectively
+    if len(df) <= start_scan:
+        return []
+
     for i in range(start_scan, len(df)):
         current_date = df.index[i]
         current_close = df['Close'].iloc[i]
         
-        # 1. Bearish Breakout (Price falls below Uptrend Support)
-        # Find recent lows within [i - lookback, i - 1]
+        # Bearish Breakdown
         recent_lows = [x for x in lows_idx if (i - lookback_window) <= x < i]
-        
         if len(recent_lows) >= 2:
-            # Get values
             x = np.array(recent_lows)
             y = df['Low'].iloc[recent_lows].values
+            slope, intercept = np.polyfit(x, y, 1)
             
-            # Linear Regression
-            slope, intercept, r_value, p_value, std_err = linregress(x, y)
-            
-            # Conditions for a valid uptrend line: Positive slope
             if slope > 0:
-                # Expected support value at current day i
                 support_val = slope * i + intercept
-                
-                # Check for breakdown (Close < Support)
-                # Filter: The previous day's close was above support (to avoid repeated signals)
                 prev_support_val = slope * (i-1) + intercept
                 if current_close < support_val and df['Close'].iloc[i-1] >= prev_support_val:
                      signals.append({
@@ -316,20 +304,16 @@ def strategy_trendline_breakout(df, order=5, lookback_window=50):
                         'intercept': intercept
                     })
 
-        # 2. Bullish Breakout (Price rises above Downtrend Resistance)
+        # Bullish Breakout
         recent_highs = [x for x in highs_idx if (i - lookback_window) <= x < i]
-        
         if len(recent_highs) >= 2:
             x = np.array(recent_highs)
             y = df['High'].iloc[recent_highs].values
+            slope, intercept = np.polyfit(x, y, 1)
             
-            slope, intercept, r_value, p_value, std_err = linregress(x, y)
-            
-            # Condition for downtrend line: Negative slope
             if slope < 0:
                 res_val = slope * i + intercept
                 prev_res_val = slope * (i-1) + intercept
-                
                 if current_close > res_val and df['Close'].iloc[i-1] <= prev_res_val:
                     signals.append({
                         'index': i,
@@ -341,32 +325,83 @@ def strategy_trendline_breakout(df, order=5, lookback_window=50):
 
     return signals
 
+# --- New: Calculate Current Trendlines for TrendVision Pro ---
+
+def calculate_current_trendlines(df, order=5, lookback_window=50):
+    """
+    Calculate the LATEST valid support and resistance trendlines.
+    Gracefully handles short data.
+    """
+    if len(df) < order * 2:
+        return None, None
+
+    # 1. Slice the dataframe to the most recent window for analysis
+    current_idx = len(df) - 1
+    # If data is shorter than window, look at whole dataframe
+    start_idx = max(0, current_idx - lookback_window)
+    
+    # Find all pivots first
+    highs_idx = argrelextrema(df['High'].values, np.greater, order=order)[0]
+    lows_idx = argrelextrema(df['Low'].values, np.less, order=order)[0]
+    
+    # Filter pivots that are within the current active window [start_idx, current_idx]
+    valid_highs = [x for x in highs_idx if x >= start_idx]
+    valid_lows = [x for x in lows_idx if x >= start_idx]
+    
+    res_line = None
+    sup_line = None
+    
+    # Calculate Resistance Trendline (connect recent highs)
+    if len(valid_highs) >= 2:
+        x = np.array(valid_highs)
+        y = df['High'].iloc[valid_highs].values
+        slope, intercept = np.polyfit(x, y, 1)
+        
+        # Generate line coordinates for plotting
+        x_plot_idx = np.arange(valid_highs[0], len(df))
+        y_plot = slope * x_plot_idx + intercept
+        res_line = (df.index[x_plot_idx], y_plot)
+        
+    # Calculate Support Trendline (connect recent lows)
+    if len(valid_lows) >= 2:
+        x = np.array(valid_lows)
+        y = df['Low'].iloc[valid_lows].values
+        slope, intercept = np.polyfit(x, y, 1)
+        
+        x_plot_idx = np.arange(valid_lows[0], len(df))
+        y_plot = slope * x_plot_idx + intercept
+        sup_line = (df.index[x_plot_idx], y_plot)
+        
+    return res_line, sup_line
+
 # -----------------------------------------------------------------------------
 # 3. 主應用程式流程 (Main App Flow)
 # -----------------------------------------------------------------------------
 
 def main():
     # --- Sidebar ---
-    st.sidebar.caption("v0.6")
+    st.sidebar.caption("v0.8.2") # Bump version
     lang_opt = st.sidebar.selectbox("Language / 語言", ['English', '繁體中文'])
     txt = TRANSLATIONS[lang_opt]
     
     st.sidebar.title(txt['sidebar_title'])
     
     # Ticker Selection
-    default_tickers = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AAPL', 'TSLA', 'NVDA']
+    default_tickers = [
+        'BTC-USD', 'ETH-USD', 'SOL-USD', 
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA'
+    ]
     ticker_input = st.sidebar.selectbox(txt['ticker_label'], default_tickers)
-    # Allow custom input via text if not in list (Streamlit UX pattern)
     custom_ticker = st.sidebar.text_input(f"Or type custom: {txt['ticker_label']}", "")
     
     final_ticker = custom_ticker.upper().strip() if custom_ticker else ticker_input
     
     # Period Selection
-    # Update: Allows selection of 1y, 2y, 3y, 4y, 5y
-    period_options = ['1y', '2y', '3y', '4y', '5y']
-    period = st.sidebar.selectbox(txt['period_label'], period_options, index=0)
+    # Update: Removed 1mo
+    period_options = ['3mo', '6mo', '1y', '2y', '3y', '4y', '5y']
+    period = st.sidebar.selectbox(txt['period_label'], period_options, index=2) # Default 1y
     
-    # --- New: Trendline Settings (v0.6) ---
+    # --- Trendline Settings ---
     st.sidebar.markdown("---")
     st.sidebar.subheader(txt['setting_trend_title'])
     
@@ -392,32 +427,84 @@ def main():
     with st.spinner(txt['loading']):
         df = get_stock_data(final_ticker, period)
     
-    if df is None or len(df) < 50:
+    # Relaxed data check for 1mo period (approx 20-22 days)
+    if df is None or len(df) < 5: 
         st.error(txt['error_ticker'].format(symbol=final_ticker))
         return
+        
+    # Warning for short data
+    if len(df) < 35:
+        st.warning(txt['error_data_length'].format(length=len(df)))
 
     # --- Run Analysis ---
     macd_signals, df_macd = strategy_macd_divergence(df.copy())
-    # v0.6: Pass dynamic slider values to trendline strategy
     trend_signals = strategy_trendline_breakout(df.copy(), order=trend_order, lookback_window=trend_window)
     
     macd_trades = perform_backtest(df, macd_signals)
     trend_trades = perform_backtest(df, trend_signals)
     
-    # --- Tabs ---
-    # Update: Swapped order - Trendline first, then MACD
-    tab1, tab2, tab3 = st.tabs([txt['tab_trend'], txt['tab_macd'], txt['tab_summary']])
+    # Calculate Current Trendlines for TrendVision
+    res_line_curr, sup_line_curr = calculate_current_trendlines(df, order=trend_order, lookback_window=trend_window)
     
-    # --- TAB 1: Trendline (Formerly Tab 2) ---
-    with tab1:
+    # --- Tabs ---
+    tab_vision, tab_trend, tab_macd, tab_summary = st.tabs([
+        txt['tab_vision'], 
+        txt['tab_trend'], 
+        txt['tab_macd'], 
+        txt['tab_summary']
+    ])
+    
+    # --- TAB 1: TrendVision Pro ---
+    with tab_vision:
+        st.subheader(txt['vision_title'])
+        
+        # Plotting - Dark Style mimic
+        fig_v, (ax1_v, ax2_v) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        
+        # Price Chart
+        ax1_v.plot(df.index, df['Close'], label='Close Price', color='white', alpha=0.8, linewidth=1.5)
+        
+        # Plot Resistance Trendline (Current)
+        if res_line_curr:
+            ax1_v.plot(res_line_curr[0], res_line_curr[1], color='red', linestyle='--', linewidth=2, label=txt['legend_res'])
+            
+        # Plot Support Trendline (Current)
+        if sup_line_curr:
+            ax1_v.plot(sup_line_curr[0], sup_line_curr[1], color='#00ff00', linestyle='--', linewidth=2, label=txt['legend_sup'])
+            
+        # Styling
+        ax1_v.set_facecolor('#0E1117') 
+        ax1_v.grid(True, color='#444444', alpha=0.3)
+        ax1_v.legend(loc='upper left', facecolor='#0E1117', labelcolor='white')
+        ax1_v.set_ylabel('Price', color='white')
+        ax1_v.tick_params(colors='white')
+        
+        # MACD Chart below - Handle case where MACD data might be missing
+        if 'MACD_12_26_9' in df_macd.columns:
+            ax2_v.plot(df_macd.index, df_macd['MACD_12_26_9'], label='MACD', color='#2962FF')
+            ax2_v.plot(df_macd.index, df_macd['MACDs_12_26_9'], label='Signal', color='#FF6D00')
+            ax2_v.bar(df_macd.index, df_macd['MACDh_12_26_9'], label='Hist', color='gray', alpha=0.3)
+        else:
+            ax2_v.text(0.5, 0.5, "Insufficient data for MACD", color='white', ha='center')
+        
+        ax2_v.set_facecolor('#0E1117')
+        ax2_v.grid(True, color='#444444', alpha=0.3)
+        ax2_v.legend(loc='upper left', facecolor='#0E1117', labelcolor='white')
+        ax2_v.tick_params(colors='white')
+        
+        fig_v.patch.set_facecolor('#0E1117')
+        fig_v.tight_layout()
+        st.pyplot(fig_v, use_container_width=True)
+
+    # --- TAB 2: Trendline Breakout (Backtest) ---
+    with tab_trend:
         st.subheader(f"Trendline Breakout - {final_ticker}")
         
         fig2, ax = plt.subplots(figsize=(12, 6))
         ax.plot(df.index, df['Close'], label='Close', color='black', alpha=0.6)
-        ax.set_title(txt['chart_price']) # Uses English even in ZH mode now
+        ax.set_title(txt['chart_price'])
         ax.grid(True, alpha=0.3)
         
-        # Plot Signals and specific trendlines associated with them
         for sig in trend_signals:
             date = sig['date']
             price = df.loc[date, 'Close']
@@ -425,18 +512,12 @@ def main():
             slope = sig['slope']
             intercept = sig['intercept']
             
-            # Draw the trendline segment (lookback window)
-            # x coords for line: (idx - 50) to (idx)
-            x_vals = np.arange(idx - 50, idx + 5) # Extend slightly past signal
-            # Convert integer indices back to dates for plotting is tricky in matplotlib with dates
-            # Standard matplotlib dates are floats. 
-            # Alternative: simpler visualization - just mark the breakout point
+            x_vals = np.arange(idx - 50, idx + 5)
             
             if sig['type'] == 'Bullish':
                 ax.plot(date, price, marker='^', color='green', markersize=10)
-                # Visualize Trendline (approximate for visual context)
-                # We calculate price points relative to the index
                 y_vals = slope * x_vals + intercept
+                # Validate dates
                 valid_dates = [df.index[min(max(0, i), len(df)-1)] for i in x_vals]
                 ax.plot(valid_dates, y_vals, color='red', linestyle='--', alpha=0.5, linewidth=1)
                 
@@ -446,7 +527,6 @@ def main():
                 valid_dates = [df.index[min(max(0, i), len(df)-1)] for i in x_vals]
                 ax.plot(valid_dates, y_vals, color='green', linestyle='--', alpha=0.5, linewidth=1)
 
-        # Mobile Optimization
         fig2.tight_layout()
         st.pyplot(fig2, use_container_width=True)
         
@@ -467,10 +547,7 @@ def main():
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df_t[col] = display_df_t[col].dt.strftime('%Y-%m-%d')
 
-            # Sort by Date DESCENDING (Newest first)
             display_df_t = display_df_t.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
-
-            # Calculate dynamic height
             table_height_t = (len(display_df_t) + 1) * 35 + 3
 
             st.dataframe(
@@ -485,46 +562,41 @@ def main():
         else:
             st.info("No signals detected.")
 
-    # --- TAB 2: MACD (Formerly Tab 1) ---
-    with tab2:
+    # --- TAB 3: MACD ---
+    with tab_macd:
         st.subheader(f"MACD (12,26,9) - {final_ticker}")
         
-        # Plotting
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
         
-        # Price
         ax1.plot(df.index, df['Close'], label='Close', color='black', alpha=0.6)
         ax1.set_ylabel('Price')
-        ax1.set_title(txt['chart_price']) # Uses English even in ZH mode now
+        ax1.set_title(txt['chart_price'])
         ax1.grid(True, alpha=0.3)
         
-        # MACD
-        ax2.plot(df_macd.index, df_macd['MACD_12_26_9'], label='MACD', color='blue')
-        ax2.plot(df_macd.index, df_macd['MACDs_12_26_9'], label='Signal', color='orange')
-        ax2.bar(df_macd.index, df_macd['MACDh_12_26_9'], label='Hist', color='gray', alpha=0.3)
-        ax2.set_title(txt['chart_macd']) # Uses English even in ZH mode now
+        # Handle missing MACD columns
+        if 'MACD_12_26_9' in df_macd.columns:
+            ax2.plot(df_macd.index, df_macd['MACD_12_26_9'], label='MACD', color='blue')
+            ax2.plot(df_macd.index, df_macd['MACDs_12_26_9'], label='Signal', color='orange')
+            ax2.bar(df_macd.index, df_macd['MACDh_12_26_9'], label='Hist', color='gray', alpha=0.3)
+        else:
+            ax2.text(0.5, 0.5, "Insufficient data for MACD", ha='center')
+
+        ax2.set_title(txt['chart_macd'])
         ax2.grid(True, alpha=0.3)
         
-        # Plot Signals
         for sig in macd_signals:
             date = sig['date']
             price = df.loc[date, 'Close']
             
             if sig['type'] == 'Bullish':
-                # Green Up Arrow
                 ax1.plot(date, price, marker='^', color='green', markersize=10, linestyle='None')
-                # Draw line connecting divergence points if needed (advanced)
             else:
-                # Red Down Arrow
                 ax1.plot(date, price, marker='v', color='red', markersize=10, linestyle='None')
 
-        # Mobile Optimization: Tight layout and container width
         fig.tight_layout()
         st.pyplot(fig, use_container_width=True)
         
-        # Table
         if not macd_trades.empty:
-            # Format table columns for display
             disp_cols = {
                 'Signal Date': txt['col_date'],
                 'Type': txt['col_type'],
@@ -535,19 +607,14 @@ def main():
                 'Return (%)': txt['col_return']
             }
             
-            # Map type text
             display_df = macd_trades.copy()
             display_df['Type'] = display_df['Type'].map({'Bullish': txt['bullish'], 'Bearish': txt['bearish']})
             display_df = display_df.rename(columns=disp_cols)
             
-            # Format dates and floats
             for col in [txt['col_date'], txt['col_entry_date'], txt['col_exit_date']]:
                 display_df[col] = display_df[col].dt.strftime('%Y-%m-%d')
             
-            # Sort by Date DESCENDING (Newest first)
             display_df = display_df.sort_values(by=txt['col_date'], ascending=False).reset_index(drop=True)
-            
-            # Calculate dynamic height: (rows + 1 header) * 35px per row approx
             table_height = (len(display_df) + 1) * 35 + 3
 
             st.dataframe(
@@ -562,13 +629,12 @@ def main():
         else:
             st.info("No signals detected.")
 
-    # --- TAB 3: Summary & Reliability ---
-    with tab3:
+    # --- TAB 4: Summary & Reliability ---
+    with tab_summary:
         st.subheader(txt['tab_summary'])
         
         col1, col2 = st.columns(2)
         
-        # Metrics Calculation
         def get_stats(trade_df):
             if trade_df.empty: return 0, 0, 0
             total = len(trade_df)
@@ -576,15 +642,12 @@ def main():
             rate = (wins / total) * 100
             return total, wins, rate
 
-        # MACD Stats
         m_total, m_wins, m_rate = get_stats(macd_trades)
         m_stars = calculate_star_rating(m_rate) if m_total > 0 else "N/A"
         
-        # Trend Stats
         t_total, t_wins, t_rate = get_stats(trend_trades)
         t_stars = calculate_star_rating(t_rate) if t_total > 0 else "N/A"
 
-        # Update: Display Trendline stats in col1 (left), MACD in col2 (right)
         with col1:
             st.markdown(f"### {txt['tab_trend']}")
             st.metric(txt['total_signals'], t_total)
